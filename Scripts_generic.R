@@ -1,0 +1,245 @@
+
+##############Subread Raw read count using R  ##############
+
+srun --pty bash -i
+module load R
+#R 4.1.1.-rhe18
+R
+
+#set working directory directory with a folder containing *.BAM files: 
+setwd(".../BAM_star")
+#point to sample table information.
+sampleTable <- read.csv(file="***.csv", header =TRUE)
+#specify directory
+dir<- ".../BAM_star"
+filenames <- file.path(dir, paste0(sampleTable$sample, "Aligned.sortedByCoord.out.bam"))
+file.exists(filenames)
+#point to GTF files
+gtffile <- ".../TAIR10_GFF3_genes.gtf"
+file.exists(gtffile)
+
+#this would install BiocManager on hpc
+if (!requireNamespace("BiocManager", quietly = TRUE)) 
+install.packages("BiocManager") 
+#this would install Rsubread on hpc
+BiocManager::install("Rsubread")
+library("Rsubread")
+fc <- featureCounts(files=filenames, 
+                    annot.ext=gtffile, 
+                    isGTFAnnotationFile=TRUE,
+                    isPairedEnd=FALSE)
+
+countdata<-fc$counts
+dim(countdata)
+head(countdata)
+sampleTable <- read.csv(file="SampleKeys_JK.csv", header =TRUE)
+colnames(fc$counts) <- sampleTable$sample
+head(fc$counts)
+#Specify output file name Subreads_counts_name.csv 
+write.csv(fc$counts, file= "*.csv")
+
+
+
+############## DESeq2 on iDEP platform ##############
+
+
+#DEseq2 analysis was performed on the iDEP platform: 
+#Ge, S.X., Son, E.W. & Yao, R. iDEP: an integrated web application for differential expression and pathway analysis of RNA-Seq data. BMC Bioinformatics 19, 534 (2018).
+#https://doi.org/10.1186/s12859-018-2486-6
+
+##############FlowPot experiment: AX vs HO comparisons##############
+
+# R version 4.2.1 (2022-06-23)
+if (!require("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")  # v. 1.30.18
+if (!require("DESeq2", quietly = TRUE))
+  BiocManager::install("DESeq2")  # v. 1.36.0
+library(DESeq2) # D.E.G.
+FC <- 2 # Fold-change cutoff
+FDR <- 0.05 # FDR cutoff
+alpha <- 0.1 # independent filtering, default
+
+#  Prepare data --------------------
+# Use the "Converted counts" button in the Pre-Process tab
+# to download the filtered counts file with gene IDs converted to Ensembl.
+raw_counts = read.csv("converted_counts_data.csv")
+row.names(raw_counts) <- raw_counts$User_ID
+raw_counts <- raw_counts[, -(1:3)] # delete 3 columns of IDs
+str(raw_counts)
+
+# Factors coded: Treatment --> A, Location --> B
+col_data <- data.frame(
+  "A" = c("HO", "HO", "HO", "HO", "HO", "HO", "AX", "AX", "AX", "AX", "AX", "AX"),
+  "B" = c("IA", "IA", "IA", "MI", "MI", "MI", "IA", "IA", "IA", "MI", "MI", "MI")
+)
+row.names(col_data) <- colnames(raw_counts)
+col_data
+
+#Set reference level 
+col_data[, 1] <- as.factor(col_data[, 1])
+col_data[, 1] <- relevel(col_data[, 1], "AX")
+
+# Run DESeq2--------------------
+dds <- DESeq2::DESeqDataSetFromMatrix(
+   countData = raw_counts,
+   colData = col_data,
+   design = ~  A 
+)
+dds = DESeq2::DESeq(dds) 
+
+# Extract results--------------------
+
+# Comparison 1 of 1:  HO-AX
+res <- DESeq2::results(dds,
+  contrast = c("A", "HO", "AX"),
+  independentFiltering = FALSE,
+  alpha = alpha
+)
+# Examine results on iDEP  
+
+summary(res)
+plotMA(res)
+plotCounts(dds, gene = which.min(res$padj), intgroup = colnames(col_data)[1])
+res <- subset(res, padj < FDR & abs(log2FoldChange) > log2(FC)) # Select
+table(sign(res$log2FoldChange)) # N. of genes Down, Up
+res <- res[order(-res$log2FoldChange), ] #sort
+head(res) #top upregulated
+tail(res) #top downregulated
+
+
+############## FlowPot experiment: MSU (MI) and Laurel(IA) AX vs HO comparisons##############
+
+#  Prepare data --------------------
+# Use the "Converted counts" button in the Pre-Process tab
+# to download the filtered counts file with gene IDs converted to Ensembl.
+raw_counts = read.csv("converted_counts_data.csv")
+row.names(raw_counts) <- raw_counts$User_ID
+raw_counts <- raw_counts[, -(1:3)] # delete 3 columns of IDs
+str(raw_counts)
+
+col_data <- data.frame(
+  "sample" = c("HOIA1", "HOIA2", "HOIA3", "HOMI1", "HOMI2", "HOMI3", "AXIA1", "AXIA2", "AXIA3", "AXMI1", "AXMI2", "AXMI3"),
+  "groups" = c("HOIA", "HOIA", "HOIA", "HOMI", "HOMI", "HOMI", "AXIA", "AXIA", "AXIA", "AXMI", "AXMI", "AXMI")
+)
+
+# Run DESeq2--------------------
+dds <- DESeq2::DESeqDataSetFromMatrix(
+  countData = raw_counts,
+  colData = col_data,
+  design = ~groups
+)
+dds <- DESeq2::DESeq(dds)
+
+# Extract results--------------------
+
+# Comparison 1 of 2:  HOIA-AXIA
+res <- DESeq2::results(dds, 
+  contrast = c("groups", "HOIA", "AXIA"),
+  independentFiltering = FALSE,
+  alpha = alpha
+)
+# Examine results on iDEP 
+
+# Comparison 2 of 2:  HOMI-AXMI
+res <- DESeq2::results(dds, 
+  contrast = c("groups", "HOMI", "AXMI"),
+  independentFiltering = FALSE,
+  alpha = alpha
+)
+# Examine results on iDEP
+summary(res)
+plotMA(res)
+plotCounts(dds, gene = which.min(res$padj), intgroup = colnames(col_data)[1])
+res <- subset(res, padj < FDR & abs(log2FoldChange) > log2(FC)) # Select
+table(sign(res$log2FoldChange)) # N. of genes Down, Up
+res <- res[order(-res$log2FoldChange), ] #sort
+head(res) #top upregulated
+tail(res) #top downregulated
+
+
+##############GNotoPot experiments##############
+
+# DESeq2 script generated by iDEP
+# R version 4.2.1 (2022-06-23)
+if (!require("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")  # v. 1.30.18
+if (!require("DESeq2", quietly = TRUE))
+  BiocManager::install("DESeq2")  # v. 1.36.0
+library(DESeq2) # D.E.G.
+FC <- 2 # Fold-change cutoff
+FDR <- 0.05 # FDR cutoff
+alpha <- 0.1 # independent filtering, default
+
+#  Prepare data --------------------
+# Use the "Converted counts" button in the Pre-Process tab
+# to download the filtered counts file with gene IDs converted to Ensembl.
+raw_counts = read.csv("converted_counts_data.csv")
+row.names(raw_counts) <- raw_counts$User_ID
+raw_counts <- raw_counts[, -(1:3)] # delete 3 columns of IDs
+str(raw_counts)
+
+col_data <- data.frame(
+  "sample" = c("GP_GF_1", "GP_GF_2", "GP_GF_3", "GP_C_1", "GP_C_2", "GP_C_3", "GP_m_1", "GP_m_2", "GP_m_3"),
+  "groups" = c("GP_GF", "GP_GF", "GP_GF", "GP_C", "GP_C", "GP_C", "GP_m", "GP_m", "GP_m")
+)
+
+# Run DESeq2--------------------
+dds <- DESeq2::DESeqDataSetFromMatrix(
+  countData = raw_counts,
+  colData = col_data,
+  design = ~groups
+)
+dds <- DESeq2::DESeq(dds)
+
+# Extract results--------------------
+
+# Comparison 1 of 3:  GP_C-GP_GF
+res <- DESeq2::results(dds, 
+  contrast = c("groups", "GP_C", "GP_GF"),
+  independentFiltering = FALSE,
+  alpha = alpha
+)
+# Examine results on iDEP
+
+summary(res)
+plotMA(res)
+plotCounts(dds, gene = which.min(res$padj), intgroup = colnames(col_data)[1])
+res <- subset(res, padj < FDR & abs(log2FoldChange) > log2(FC)) # Select
+table(sign(res$log2FoldChange)) # N. of genes Down, Up
+res <- res[order(-res$log2FoldChange), ] #sort
+head(res) #top upregulated
+tail(res) #top downregulated
+
+# Comparison 2 of 3:  GP_m-GP_C
+res <- DESeq2::results(dds, 
+  contrast = c("groups", "GP_m", "GP_C"),
+  independentFiltering = FALSE,
+  alpha = alpha
+)
+# Examine results on iDEP
+
+summary(res)
+plotMA(res)
+plotCounts(dds, gene = which.min(res$padj), intgroup = colnames(col_data)[1])
+res <- subset(res, padj < FDR & abs(log2FoldChange) > log2(FC)) # Select
+table(sign(res$log2FoldChange)) # N. of genes Down, Up
+res <- res[order(-res$log2FoldChange), ] #sort
+head(res) #top upregulated
+tail(res) #top downregulated
+
+# Comparison 3 of 3:  GP_m-GP_GF
+res <- DESeq2::results(dds, 
+  contrast = c("groups", "GP_m", "GP_GF"),
+  independentFiltering = FALSE,
+  alpha = alpha
+)
+# Examine results on iDEP
+
+summary(res)
+plotMA(res)
+plotCounts(dds, gene = which.min(res$padj), intgroup = colnames(col_data)[1])
+res <- subset(res, padj < FDR & abs(log2FoldChange) > log2(FC)) # Select
+table(sign(res$log2FoldChange)) # N. of genes Down, Up
+res <- res[order(-res$log2FoldChange), ] #sort
+head(res) #top upregulated
+tail(res) #top downregulated
